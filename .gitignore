@@ -1,0 +1,6 @@
+*.swp
+*.hex
+*.o
+*.pyc
+*.DS_Store
+*__pycache__*
