@@ -192,7 +192,7 @@ class PlateData:
                 for cycleblock in cycleblocks:
                     maxcol = 0
                     maxrow = 0
-                    well_vals = np.zeros((6000, 6000))
+                    well_vals = np.zeros((200, 200))
                     for line in cycleblock.split('\n'):
                         try:
                             well_id, val_str = line.split(':')
