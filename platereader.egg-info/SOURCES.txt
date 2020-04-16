@@ -1,9 +1,0 @@
-README.md
-setup.py
-platereader/__init__.py
-platereader/clariostar.py
-platereader.egg-info/PKG-INFO
-platereader.egg-info/SOURCES.txt
-platereader.egg-info/dependency_links.txt
-platereader.egg-info/requires.txt
-platereader.egg-info/top_level.txt
