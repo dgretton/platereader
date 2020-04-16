@@ -1,11 +1,13 @@
-import logging, os, types, csv, re, datetime, time, string
-import numpy as np
+import loggingimport osimport typesimport csvimport reimport datetimeimport timeimport stringimport numpy as np
+
+class PlateDataPathError(IOError):
+    pass
 
 class ClarioStar:
     #TODO: make configuration file
     default_protocol_db_path = 'C:\\Program Files (x86)\\BMG\\CLARIOstar\\User\\Definit'
-    default_output_db_path = 'C:\\Users\\Hamilton\\Dropbox\\plate_reader_results\\mars_database'
-    output_directory = 'C:\\Users\\Hamilton\\Dropbox\\plate_reader_results'
+    default_output_db_path = 'C:\\Users\\Hamilton\\mars_database'
+    output_directory = 'C:\\Users\\Hamilton\\Dropbox\\plate_reader_results\\'# + str(datetime.datetime.now()).split()[0]
     startup_time = 20.0 # seconds
 
     def __init__(self, protocol_db=None):
@@ -26,6 +28,9 @@ class ClarioStar:
             self._client = win32com.client.Dispatch('BMG_ActiveX.BMGRemoteControl')
             self._client.OpenConnectionV('CLARIOstar')
             self.start_time = time.time()
+            if len(self._platedata_files()) > 1000:
+                logging.warn('More than 1000 plate data files in ClarioStar output directory (' + ClarioStar.output_directory +
+                             '). Consider clearing for proper performance.')
 
     def execute(self, activex_args, block=True):
         if self.disabled:
@@ -49,6 +54,12 @@ class ClarioStar:
     def plate_in(self, block=True):
         self.execute(['PlateIn'], block)
 
+    def _platedata_files(self):
+        dir_contents = os.listdir(ClarioStar.output_directory)
+        files = (os.path.join(ClarioStar.output_directory, f) for f in dir_contents)
+        files = filter((lambda f: os.path.isfile(f) and f.split('.csv')[-1] == ''), files)
+        return list(reversed(sorted(files, key=lambda x: os.path.getmtime(x))))
+
     def run_protocol(self, protocol_name, plate_id_1=None, plate_id_2=None, block=True):
         run_protocol_args = ['Run', protocol_name, self.protocol_db, ClarioStar.default_output_db_path]
         for plate_id in plate_id_1, plate_id_2:
@@ -59,34 +70,43 @@ class ClarioStar:
         if self.disabled:
             return None
 
-        mem = types.SimpleNamespace(dir_contents_hash=None, path='')
+        mem = types.SimpleNamespace(dir_update_time=None, path='')
         def filename_promise():
             if mem.path:
                 return mem.path
-            dir_contents = list(sorted(os.listdir(ClarioStar.output_directory)))
-            if mem.dir_contents_hash != hash(str(dir_contents)): # Try to avoid reading every file over and over
-                files = (os.path.join(ClarioStar.output_directory, f) for f in dir_contents)
-                files = filter((lambda f: os.path.isfile(f) and f.split('.csv')[-1] == ''), files)
-                files = reversed(sorted(files, key=lambda x: os.path.getmtime(x)))
-                for abs_filename in files:
+            if mem.dir_update_time != os.path.getmtime(ClarioStar.output_directory): # Try to avoid reading every file over and over
+                for abs_filename in self._platedata_files():
                     with open(abs_filename) as f:
                         fstr = f.read()
                     if fileid in fstr:
                         mem.path = abs_filename
                         return abs_filename
-                mem.dir_contents_hash = hash(str(dir_contents))
-            raise IOError('No file with id ' + fileid + ' in it yet')
+                mem.dir_update_time = os.path.getmtime(ClarioStar.output_directory)
+            raise PlateDataPathError('No file with id ' + fileid + ' in it yet')
 
         plate_data = PlateData(filename_promise)
         if block:
             try:
-                plate_data.wait_for_file(timeout=4)
-            except IOError:
+                plate_data.wait_for_file(timeout=60*5)
+            except PlateDataPathError:
                 raise IOError('No matching file found in plate reader output directory after blocking protocol run')
         return plate_data
 
     def run_protocols(self, protocol_names, plate_id_1=None, plate_id_2=None, block=True):
-        return [self.run_protocol(proto_name, plate_id_1, plate_id_2, block) for proto_name in protocol_names]
+        results = []
+        for proto_name in protocol_names:
+            r = None
+            try:
+                r = self.run_protocol(proto_name, plate_id_1, plate_id_2, block)
+            except IOError:
+                pass
+            if r is None:
+                # in response to IO error, try taking the reading again
+                logging.info('IO error upon running Clariostar program. Trying to run protocol again')
+                r = self.run_protocol(proto_name, plate_id_1, plate_id_2, block)
+                logging.info('Successfully ran protocol again')
+            results.append(r)
+        return results
 
     def unique_id(self):
         time.sleep(.0011)
@@ -104,9 +124,6 @@ class ClarioStar:
     def __exit__(self, *args):
         if self._client is not None:
             self._client.CloseConnection()
-
-class PlateDataPathError(IOError):
-    pass
 
 class PlateData:
 
@@ -192,7 +209,7 @@ class PlateData:
                 for cycleblock in cycleblocks:
                     maxcol = 0
                     maxrow = 0
-                    well_vals = np.zeros((200, 200))
+                    well_vals = np.zeros((6000, 6000))
                     for line in cycleblock.split('\n'):
                         try:
                             well_id, val_str = line.split(':')
@@ -236,7 +253,7 @@ class PlateData:
                 return
             except PlateDataPathError:
                 time.sleep(1)
-        raise IOError('PlateData timed out while waiting for ' + str(self._path) + ' to appear')
+        raise PlateDataPathError('PlateData timed out while waiting for ' + str(self._path) + ' to appear')
 
     def reload(self):
         self._path = self._text = self._csvrows = self._blockdata = self._header_namespace = None
